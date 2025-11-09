@@ -3,147 +3,104 @@ import mingpan_logic as mp
 import markdown
 import os
 import re
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import Select, WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
+import requests
+from bs4 import BeautifulSoup
+from urllib.parse import urljoin
 
 app = Flask(__name__)
 
-# ---------------------- 爬蟲部分 ----------------------
-def fetch_chart_selenium(year, month, day, hour, gender):
+FORM_URL = "https://fate.windada.com/cgi-bin/fate"
+
+def _pick_select_name(soup, select_id, fallback_name):
+    """從 select 的 id 找到對應的 name，若沒有就用預設名稱。"""
+    tag = soup.find("select", id=select_id)
+    if tag and tag.get("name"):
+        return tag["name"]
+    return fallback_name
+
+def _pick_radio_value(soup, input_id, default_value):
+    """從 radio input 取實際 value 屬性，若沒有就用預設值。"""
+    tag = soup.find("input", id=input_id)
+    if tag and tag.get("value"):
+        return tag["value"]
+    return default_value
+
+def fetch_chart_http(year, month, day, hour, gender):
     """
-    從 fate.windada.com 爬取紫微命盤文字
-    Render/本地 相容版：智慧判斷環境並啟動 Chromium/ChromeDriver
+    以 requests 模擬表單提交，取得命盤主表格文字（不需要 Selenium/Chrome）
     """
+    s = requests.Session()
+    s.headers.update({
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+    })
 
-    IS_RENDER = os.getenv("CHROME_BIN") is not None
-    options = Options()
-    service = None
+    # 1) 先 GET 取得表單，抓真正的欄位 name 與必要 hidden 欄位
+    resp = s.get(FORM_URL, timeout=20)
+    resp.raise_for_status()
+    soup = BeautifulSoup(resp.text, "lxml")
 
-    if IS_RENDER:
-        # === Render 環境（Chrome for Testing + 對應 Driver）===
-        chrome_path = os.getenv("CHROME_BIN", "/opt/chrome/chrome")
-        driver_path = os.getenv("CHROMEDRIVER_PATH", "/opt/chromedriver/chromedriver")
+    form = soup.find("form")
+    if not form:
+        raise RuntimeError("找不到命盤輸入表單")
 
-        if not (os.path.exists(chrome_path) and os.path.exists(driver_path)):
-            raise FileNotFoundError(
-                f"Render 找不到 Chrome/Driver：CHROME_BIN={chrome_path}, CHROMEDRIVER_PATH={driver_path}"
-            )
+    action = form.get("action") or FORM_URL
+    post_url = urljoin(FORM_URL, action)
 
-        # /tmp 可寫資料夾
-        TMP_BASE = "/tmp"
-        UD = os.path.join(TMP_BASE, "chrome-user-data")
-        DP = os.path.join(TMP_BASE, "chrome-data")
-        DC = os.path.join(TMP_BASE, "chrome-cache")
-        for d in (UD, DP, DC):
-            os.makedirs(d, exist_ok=True)
+    payload = {}
 
-        # Headless 容器相容旗標（去掉 single-process；補 setuid sandbox 與 remote-allow-origins）
-        options.binary_location = chrome_path
-        options.add_argument("--headless=new")
-        options.add_argument("--no-sandbox")
-        options.add_argument("--disable-setuid-sandbox")
-        options.add_argument("--disable-dev-shm-usage")
-        options.add_argument("--disable-gpu")
-        options.add_argument("--disable-extensions")
-        options.add_argument("--disable-software-rasterizer")
-        options.add_argument("--disable-infobars")
-        options.add_argument("--no-first-run")
-        options.add_argument("--no-zygote")
-        options.add_argument("--remote-allow-origins=*")
-        options.add_argument("--remote-debugging-port=9222")
-        options.add_argument("--window-size=1280,800")
-        options.add_argument(f"--user-data-dir={UD}")
-        options.add_argument(f"--data-path={DP}")
-        options.add_argument(f"--disk-cache-dir={DC}")
-        options.page_load_strategy = "eager"
+    # 抓出 select 的實際 name（網站可能不是 Month/Day/Hour 的固定字串）
+    name_year  = (form.find("input", {"name": "Year"}) or {}).get("name", "Year")
+    name_month = _pick_select_name(form, "bMonth", "Month")
+    name_day   = _pick_select_name(form, "bDay",   "Day")
+    name_hour  = _pick_select_name(form, "bHour",  "Hour")
+    name_sex   = (form.find("input", {"name": "Sex"}) or {}).get("name", "Sex")  # radio name
 
-        # 只用指定的 chromedriver（避免 Selenium Manager 自行挑版本）
-        log_file = os.path.join(TMP_BASE, "chromedriver.log")
-        try:
-            service = Service(driver_path, log_output=log_file)
-        except TypeError:
-            service = Service(driver_path)
+    # radio 實際的 value（有些站台不是固定 Male/Female，而是 "1"/"0" 或中文）
+    male_value   = _pick_radio_value(form, "bMale",   "Male")
+    female_value = _pick_radio_value(form, "bFemale", "Female")
 
-        # 在 Render 上直接用 service 啟動，避免去嘗試 Manager
-        driver = webdriver.Chrome(service=service, options=options)
+    payload[name_year]  = str(year)
+    payload[name_month] = str(int(month))  # 1-12
+    payload[name_day]   = str(int(day))    # 1-31
+    payload[name_hour]  = str(int(hour))   # 0-23
+    payload[name_sex]   = male_value if str(gender).lower().startswith("m") else female_value
 
-    else:
-        # === 本地環境（保留你的原有行為）===
-        local_driver_path = os.path.join(os.getcwd(), 'chromedriver')
-        if os.name == 'nt' and not os.path.exists(local_driver_path):
-            local_driver_path = os.path.join(os.getcwd(), 'chromedriver.exe')
-        explicit_path_found = os.path.exists(local_driver_path)
+    # 也把 form 裡所有 hidden 欄位帶上（避免伺服器檢查失敗）
+    for hid in form.find_all("input", {"type": "hidden"}):
+        name = hid.get("name")
+        val  = hid.get("value", "")
+        if name and name not in payload:
+            payload[name] = val
 
-        if explicit_path_found:
-            service = Service(local_driver_path)
-            print(f"DEBUG: 本地環境，使用專案根目錄的 ChromeDriver: {local_driver_path}")
-        else:
-            try:
-                service = Service()  # 使用 PATH
-                print("DEBUG: 本地環境，使用 PATH 的 ChromeDriver。")
-            except Exception as e:
-                raise FileNotFoundError(
-                    f"本地找不到 chromedriver。請將對應版本放到 PATH 或專案根目錄。原始錯誤: {e}"
-                )
-        options.page_load_strategy = "eager"
-        if not explicit_path_found:
-            options.add_experimental_option("detach", True)
+    # 2) POST 送出表單
+    resp2 = s.post(post_url, data=payload, timeout=30)
+    resp2.raise_for_status()
+    soup2 = BeautifulSoup(resp2.text, "lxml")
 
-        # 本地先試 Manager，失敗再 fallback
-        try:
-            driver = webdriver.Chrome(options=options)
-        except Exception:
-            driver = webdriver.Chrome(service=service, options=options)
+    # 3) 尋找包含「命宮」的主表格，抽出所有 <td> 的文字
+    tables = soup2.find_all("table")
+    main_table = None
+    for t in tables:
+        if "命宮" in t.get_text(" ", strip=True):
+            main_table = t
+            break
 
-    # ====== 實際爬取 ======
-    try:
-        driver.set_page_load_timeout(25)
-        driver.get("https://fate.windada.com/cgi-bin/fate")
+    if not main_table:
+        # 將回應片段附上，便於 debug
+        snippet = soup2.get_text(" ", strip=True)[:400]
+        raise RuntimeError(f"找不到命盤主表格，可能網站結構變更或輸入無效。頁面片段：{snippet}")
 
-        WebDriverWait(driver, 8).until(EC.presence_of_element_located((By.NAME, "Sex")))
+    cells = main_table.find_all("td")
+    chart_lines = []
+    for c in cells:
+        txt = c.get_text("\n", strip=True)
+        if not txt:
+            continue
+        txt = re.sub(r'^\d+\.\s*', '', txt)  # 清掉 "1. " 這類編號
+        chart_lines.append(txt)
 
-        if gender.lower().startswith("m"):
-            driver.find_element(By.ID, "bMale").click()
-        else:
-            driver.find_element(By.ID, "bFemale").click()
-
-        driver.find_element(By.NAME, "Year").send_keys(str(year))
-        Select(driver.find_element(By.ID, "bMonth")).select_by_value(str(month))
-        Select(driver.find_element(By.ID, "bDay")).select_by_value(str(day))
-        Select(driver.find_element(By.ID, "bHour")).select_by_value(str(hour))
-
-        driver.find_element(By.CSS_SELECTOR, 'input[type="submit"]').click()
-
-        WebDriverWait(driver, 10).until(EC.presence_of_all_elements_located((By.TAG_NAME, "table")))
-        tables = driver.find_elements(By.TAG_NAME, "table")
-        main_table = None
-        for t in tables:
-            if "命宮" in t.text:
-                main_table = t
-                break
-        if not main_table:
-            raise Exception("爬蟲失敗：找不到命盤主表格。可能網頁結構已改變或輸入無效。")
-
-        cells = main_table.find_elements(By.TAG_NAME, "td")
-        chart_lines = []
-        for c in cells:
-            txt = c.text.strip()
-            if not txt:
-                continue
-            txt = re.sub(r'^\d+\.\s*', '', txt)
-            chart_lines.append(txt)
-
-        return "\n\n".join(chart_lines)
-
-    finally:
-        try:
-            driver.quit()
-        except Exception:
-            pass
+    return "\n\n".join(chart_lines)
 
 # ---------------------- Flask 主邏輯 ----------------------
 @app.route("/", methods=["GET", "POST"])
@@ -161,11 +118,16 @@ def home():
             user_inputs["gender"] = request.form.get("gender", "m")
             user_inputs["cyear"] = int(request.form.get("cyear", 2025))
 
-            raw_input = fetch_chart_selenium(
-                user_inputs["year"], user_inputs["month"], user_inputs["day"],
-                user_inputs["hour"], user_inputs["gender"]
+            # ★ 以 HTTP 模擬表單方式抓資料（不再使用 Selenium/Chrome）
+            raw_input = fetch_chart_http(
+                user_inputs["year"],
+                user_inputs["month"],
+                user_inputs["day"],
+                user_inputs["hour"],
+                user_inputs["gender"]
             )
 
+            # 命盤分析
             mp.CYEAR = user_inputs["cyear"]
             data, col_order, year_stem = mp.parse_chart(raw_input)
             md = mp.render_markdown_table_v7(data, col_order, year_stem, raw_input)
@@ -173,25 +135,11 @@ def home():
 
         except Exception as e:
             print(f"ERROR: {e}")
-            # 讀取 /tmp/chromedriver.log（Render 才會有）
-            tail = ""
-            try:
-                with open("/tmp/chromedriver.log", "r", encoding="utf-8", errors="ignore") as f:
-                    tail = "".join(f.readlines()[-200:])
-            except Exception:
-                pass
-            safe_tail = (
-                tail[:8000]
-                .replace("&", "&amp;")
-                .replace("<", "&lt;")
-                .replace(">", "&gt;")
-            )
             result_html = (
                 "<p style='color:red; font-weight: bold;'>發生錯誤：無法生成命盤</p>"
                 f"<p style='color:orange;'>原因：{e}</p>"
                 "<p style='color:lightgray; font-size: small;'>"
-                "請確認 Render 的 Chrome/Driver 路徑與相容性；若仍失敗，請提供下方 ChromeDriver 日誌尾端。</p>"
-                f"<pre style='white-space:pre-wrap; font-size:12px; color:#ccc;'>{safe_tail}</pre>"
+                "（此版本不使用 Chrome/Selenium，若仍失敗，多半為網站欄位或結構更新，請回報錯誤訊息）</p>"
             )
 
     return render_template("index.html", result_html=result_html, raw_input=raw_input, inputs=user_inputs)
