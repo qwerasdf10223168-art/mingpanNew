@@ -1,0 +1,14 @@
+# === Web Framework ===
+Flask==3.0.3
+gunicorn==23.0.0
+
+# === Web Automation (Selenium) ===
+selenium==4.24.0
+
+# === HTML Parsing & Data Processing ===
+beautifulsoup4==4.12.3
+lxml==5.3.0
+requests==2.32.3
+
+# === Optional (for markdown output in analysis) ===
+markdown==3.7

@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <title>紫微命盤助手</title>
+    <style>
+        body {
+            font-family: "Microsoft JhengHei", sans-serif;
+            background: #1e1e1e;
+            color: #eee;
+            text-align: center;
+        }
+        form {
+            margin: 20px auto;
+            background: #2e2e2e;
+            padding: 20px;
+            border-radius: 10px;
+            width: 420px;
+        }
+        input, select, button {
+            padding: 8px;
+            margin: 6px;
+            border-radius: 5px;
+            border: none;
+        }
+        label { display: inline-block; width: 80px; text-align: right; }
+        button {
+            background: #4CAF50;
+            color: white;
+            cursor: pointer;
+            width: 80%;
+        }
+        button:hover { background: #45a049; }
+        .result {
+            margin-top: 30px;
+            text-align: left;
+            width: 80%;
+            margin: 30px auto;
+        }
+        pre {
+            background: #333;
+            padding: 10px;
+            border-radius: 10px;
+            white-space: pre-wrap;
+            color: #ccc;
+        }
+    </style>
+</head>
+<body>
+    <h2>紫微命盤助手</h2>
+    <form method="post">
+        <label>國曆年：</label>
+        <input type="number" name="year" value="{{inputs.year}}" required><br>
+
+        <label>月：</label>
+        <input type="number" name="month" value="{{inputs.month}}" min="1" max="12" required><br>
+
+        <label>日：</label>
+        <input type="number" name="day" value="{{inputs.day}}" min="1" max="31" required><br>
+
+        <label>時辰：</label>
+        <select name="hour">
+            {% for h in range(0,24) %}
+            <option value="{{h}}" {% if h == inputs.hour %}selected{% endif %}>{{h}} 時</option>
+            {% endfor %}
+        </select><br>
+
+        <label>性別：</label>
+        <select name="gender">
+            <option value="m" {% if inputs.gender == 'm' %}selected{% endif %}>男</option>
+            <option value="f" {% if inputs.gender == 'f' %}selected{% endif %}>女</option>
+        </select><br>
+
+        <label>流年：</label>
+        <input type="number" name="cyear" value="{{inputs.cyear}}" required><br>
+
+        <button type="submit">生成命盤</button>
+    </form>
+
+    {% if raw_input %}
+    <div class="result">
+        <h3>命盤原始資料：</h3>
+        <pre>{{ raw_input }}</pre>
+        <h3>分析結果：</h3>
+        {{ result_html|safe }}
+    </div>
+    {% endif %}
+</body>
+</html>
