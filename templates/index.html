@@ -2,6 +2,8 @@
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
+    <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>紫微命盤助手</title>
     <style>
         body {
@@ -16,26 +18,58 @@
             padding: 20px;
             border-radius: 10px;
             width: 420px;
+            box-shadow: 0 8px 20px rgba(0,0,0,0.25);
         }
         input, select, button {
             padding: 8px;
             margin: 6px;
             border-radius: 5px;
             border: none;
+            background: #3a3a3a;
+            color: #eee;
+            width: 260px;
         }
-        label { display: inline-block; width: 80px; text-align: right; }
+        label {
+            display: inline-block;
+            width: 80px;
+            text-align: right;
+            margin-right: 6px;
+        }
         button {
             background: #4CAF50;
             color: white;
             cursor: pointer;
             width: 80%;
+            transition: background 0.2s ease;
         }
         button:hover { background: #45a049; }
+        button:disabled { opacity: 0.7; cursor: not-allowed; }
+
+        .hint {
+            font-size: 12px;
+            color: #aaa;
+            margin-top: -2px;
+        }
+
         .result {
             margin-top: 30px;
             text-align: left;
-            width: 80%;
-            margin: 30px auto;
+            width: 90%;
+            max-width: 960px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+        .card {
+            background: #2b2b2b;
+            border: 1px solid #3a3a3a;
+            border-radius: 10px;
+            padding: 16px 18px;
+            margin-bottom: 18px;
+        }
+        .card h3 {
+            margin: 0 0 10px 0;
+            font-weight: 600;
+            color: #fafafa;
         }
         pre {
             background: #333;
@@ -43,47 +77,119 @@
             border-radius: 10px;
             white-space: pre-wrap;
             color: #ccc;
+            overflow-x: auto;
         }
+        .error {
+            border-left: 4px solid #ff7373;
+            background: #3a1f1f;
+        }
+        .loading {
+            display: none;
+            margin-top: 10px;
+            font-size: 14px;
+            color: #bbb;
+        }
+        .spinner {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid #bbb;
+            border-top-color: transparent;
+            border-radius: 50%;
+            margin-right: 8px;
+            animation: spin 0.8s linear infinite;
+            vertical-align: -3px;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
     </style>
 </head>
 <body>
     <h2>紫微命盤助手</h2>
-    <form method="post">
-        <label>國曆年：</label>
-        <input type="number" name="year" value="{{inputs.year}}" required><br>
 
-        <label>月：</label>
-        <input type="number" name="month" value="{{inputs.month}}" min="1" max="12" required><br>
+    <form id="chart-form" method="post" novalidate>
+        <div>
+            <label>國曆年：</label>
+            <input type="number" name="year" value="{{ inputs.year }}" required autocomplete="off" inputmode="numeric">
+        </div>
 
-        <label>日：</label>
-        <input type="number" name="day" value="{{inputs.day}}" min="1" max="31" required><br>
+        <div>
+            <label>月：</label>
+            <input type="number" name="month" value="{{ inputs.month }}" min="1" max="12" required autocomplete="off" inputmode="numeric">
+        </div>
 
-        <label>時辰：</label>
-        <select name="hour">
-            {% for h in range(0,24) %}
-            <option value="{{h}}" {% if h == inputs.hour %}selected{% endif %}>{{h}} 時</option>
-            {% endfor %}
-        </select><br>
+        <div>
+            <label>日：</label>
+            <input type="number" name="day" value="{{ inputs.day }}" min="1" max="31" required autocomplete="off" inputmode="numeric">
+        </div>
 
-        <label>性別：</label>
-        <select name="gender">
-            <option value="m" {% if inputs.gender == 'm' %}selected{% endif %}>男</option>
-            <option value="f" {% if inputs.gender == 'f' %}selected{% endif %}>女</option>
-        </select><br>
+        <div>
+            <label>時辰：</label>
+            <select name="hour">
+                {% for h in range(0,24) %}
+                <option value="{{ h }}" {% if h == inputs.hour %}selected{% endif %}>{{ h }} 時</option>
+                {% endfor %}
+            </select>
+        </div>
 
-        <label>流年：</label>
-        <input type="number" name="cyear" value="{{inputs.cyear}}" required><br>
+        <div>
+            <label>性別：</label>
+            <select name="gender">
+                <option value="m" {% if inputs.gender == 'm' %}selected{% endif %}>男</option>
+                <option value="f" {% if inputs.gender == 'f' %}selected{% endif %}>女</option>
+            </select>
+        </div>
 
-        <button type="submit">生成命盤</button>
+        <div>
+            <label>流年：</label>
+            <input type="number" name="cyear" value="{{ inputs.cyear }}" required autocomplete="off" inputmode="numeric">
+            <div class="hint">例：2025</div>
+        </div>
+
+        <button id="submit-btn" type="submit">生成命盤</button>
+        <div id="loading" class="loading">
+            <span class="spinner"></span>處理中，請稍候…
+        </div>
     </form>
 
-    {% if raw_input %}
+    {% if result_html or raw_input %}
     <div class="result">
-        <h3>命盤原始資料：</h3>
-        <pre>{{ raw_input }}</pre>
-        <h3>分析結果：</h3>
-        {{ result_html|safe }}
+        {% if raw_input %}
+        <div class="card">
+            <h3>命盤原始資料：</h3>
+            <pre>{{ raw_input }}</pre>
+        </div>
+        {% endif %}
+
+        {% if result_html %}
+        {# 這裡不強制判斷是否為錯誤訊息；後端會以內容呈現 #}
+        <div class="card">
+            <h3>分析結果：</h3>
+            {{ result_html|safe }}
+        </div>
+        {% endif %}
     </div>
     {% endif %}
+
+    <script>
+        (function () {
+            const form = document.getElementById('chart-form');
+            const btn = document.getElementById('submit-btn');
+            const loading = document.getElementById('loading');
+
+            form.addEventListener('submit', function () {
+                // 基礎前端校驗（避免空值誤送）
+                const required = ['year', 'month', 'day', 'cyear'];
+                for (const name of required) {
+                    const el = form.querySelector(`[name="${name}"]`);
+                    if (!el || !el.value) {
+                        el && el.focus();
+                        return; // 簡單阻擋
+                    }
+                }
+                btn.disabled = true;
+                loading.style.display = 'block';
+            });
+        })();
+    </script>
 </body>
 </html>
