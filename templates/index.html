@@ -1,195 +1,221 @@
 <!DOCTYPE html>
 <html lang="zh-TW">
 <head>
-    <meta charset="UTF-8">
-    <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>紫微命盤助手</title>
-    <style>
-        body {
-            font-family: "Microsoft JhengHei", sans-serif;
-            background: #1e1e1e;
-            color: #eee;
-            text-align: center;
-        }
-        form {
-            margin: 20px auto;
-            background: #2e2e2e;
-            padding: 20px;
-            border-radius: 10px;
-            width: 420px;
-            box-shadow: 0 8px 20px rgba(0,0,0,0.25);
-        }
-        input, select, button {
-            padding: 8px;
-            margin: 6px;
-            border-radius: 5px;
-            border: none;
-            background: #3a3a3a;
-            color: #eee;
-            width: 260px;
-        }
-        label {
-            display: inline-block;
-            width: 80px;
-            text-align: right;
-            margin-right: 6px;
-        }
-        button {
-            background: #4CAF50;
-            color: white;
-            cursor: pointer;
-            width: 80%;
-            transition: background 0.2s ease;
-        }
-        button:hover { background: #45a049; }
-        button:disabled { opacity: 0.7; cursor: not-allowed; }
+  <meta charset="UTF-8" />
+  <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>紫微命盤助手</title>
+  <style>
+    :root{
+      --bg:#1b1b1b;
+      --panel:#222;
+      --card:#242526;
+      --card-ink:#e9e9e9;
+      --muted:#a9a9a9;
+      --accent:#8bd5a5;   /* 標題微亮 */
+      --border:#2f2f2f;
+      --pre:#1f1f1f;
+    }
+    /* 全站底色與字體 */
+    html,body{
+      margin:0; padding:0; background:var(--bg); color:#eee;
+      font-family: "Microsoft JhengHei", "PingFang TC", system-ui, -apple-system, Segoe UI, Roboto, "Noto Sans TC", Arial, sans-serif;
+    }
+    h1,h2,h3{ margin:0 0 .6rem 0; font-weight:700; line-height:1.25; }
+    a{ color:#9cd3ff; text-decoration:none; }
+    a:hover{ text-decoration:underline; }
 
-        .hint {
-            font-size: 12px;
-            color: #aaa;
-            margin-top: -2px;
-        }
+    /* 頁面容器 */
+    .wrap{
+      max-width: 960px;
+      margin: 28px auto;
+      padding: 0 16px 36px;
+    }
+    .header{
+      text-align:center; margin-bottom: 12px;
+    }
+    .header h2{
+      font-size: 24px; letter-spacing: .5px;
+    }
 
-        .result {
-            margin-top: 30px;
-            text-align: left;
-            width: 90%;
-            max-width: 960px;
-            margin-left: auto;
-            margin-right: auto;
-        }
-        .card {
-            background: #2b2b2b;
-            border: 1px solid #3a3a3a;
-            border-radius: 10px;
-            padding: 16px 18px;
-            margin-bottom: 18px;
-        }
-        .card h3 {
-            margin: 0 0 10px 0;
-            font-weight: 600;
-            color: #fafafa;
-        }
-        pre {
-            background: #333;
-            padding: 10px;
-            border-radius: 10px;
-            white-space: pre-wrap;
-            color: #ccc;
-            overflow-x: auto;
-        }
-        .error {
-            border-left: 4px solid #ff7373;
-            background: #3a1f1f;
-        }
-        .loading {
-            display: none;
-            margin-top: 10px;
-            font-size: 14px;
-            color: #bbb;
-        }
-        .spinner {
-            display: inline-block;
-            width: 16px;
-            height: 16px;
-            border: 2px solid #bbb;
-            border-top-color: transparent;
-            border-radius: 50%;
-            margin-right: 8px;
-            animation: spin 0.8s linear infinite;
-            vertical-align: -3px;
-        }
-        @keyframes spin { to { transform: rotate(360deg); } }
-    </style>
+    /* 表單 */
+    form{
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px 18px;
+      width: 100%;
+      box-shadow: 0 10px 24px rgba(0,0,0,.25);
+      margin: 0 auto 20px;
+    }
+    .row{ display:flex; align-items:center; gap:8px; margin:8px 0; }
+    .row label{
+      display:inline-block; width:80px; text-align:right; color:#ddd; font-size:14px;
+    }
+    input, select, button{
+      background:#303030; color:#e8e8e8; border:1px solid #3a3a3a;
+      padding:8px 10px; border-radius:8px; outline:none;
+    }
+    input, select{ width: 260px; }
+    button{
+      width: 80%; margin: 8px auto 0; display:block; cursor:pointer;
+      background:#4CAF50; border-color:#4CAF50; color:#fff; font-weight:600;
+      transition:.18s ease;
+    }
+    button:hover{ background:#43a047; }
+    button:disabled{ opacity:.7; cursor:not-allowed; }
+    .hint{ font-size:12px; color:var(--muted); margin-left:88px; margin-top:-4px; }
+
+    /* 結果區塊 */
+    .result{ margin-top: 24px; }
+    .card{
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px 18px;
+      margin: 0 0 16px 0;
+      box-shadow: 0 10px 24px rgba(0,0,0,.28);
+      color: var(--card-ink);
+    }
+    .card h3{
+      margin: 0 0 10px 0;
+      font-size: 16px;
+      color: #fff;
+      letter-spacing:.3px;
+    }
+    /* 等寬原始資料區（像截圖） */
+    .pre-raw{
+      background: var(--pre);
+      color:#dcdcdc;
+      border:1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px;
+      white-space: pre-wrap;        /* 保留換行，以便手機可換行 */
+      word-break: break-word;       /* 長字串也能換行 */
+      font-family: Consolas, Menlo, Monaco, "Cascadia Code", "Source Code Pro", "Courier New", monospace;
+      font-size: 14px;
+      line-height: 1.55;            /* 行高依照截圖調整 */
+      letter-spacing:.15px;         /* 細微字距讓中文更像截圖 */
+      max-height: none;             /* 不限制高度 */
+    }
+
+    /* 分析結果（表格深色樣式） */
+    .analysis :where(table){
+      width: 100%; border-collapse: collapse; border-spacing: 0;
+      background:#1c1c1c; border:1px solid #2a2a2a; border-radius:10px; overflow:hidden;
+    }
+    .analysis table th,
+    .analysis table td{
+      border: 1px solid #2a2a2a;
+      padding: 10px 12px;
+      font-size: 14px;
+      color:#ddd;
+      vertical-align: top;
+    }
+    .analysis table th{
+      background:#222; color:#fafafa; font-weight:700;
+    }
+    .analysis h4{
+      margin: 10px 0 6px; color:#fff; font-size:15px;
+    }
+
+    /* loading */
+    .loading{ display:none; margin-top:10px; font-size:14px; color:#bbb; text-align:center; }
+    .spinner{
+      display:inline-block; width:16px; height:16px; border:2px solid #bbb;
+      border-top-color:transparent; border-radius:50%; margin-right:8px;
+      animation:spin .8s linear infinite; vertical-align:-3px;
+    }
+    @keyframes spin{ to{ transform: rotate(360deg);} }
+
+    /* 手機調整 */
+    @media (max-width:560px){
+      .row{ flex-wrap:wrap; }
+      .row label{ width: 100px; text-align:left; }
+      input, select{ width: 100%; }
+      .hint{ margin-left:0; }
+    }
+  </style>
 </head>
 <body>
-    <h2>紫微命盤助手</h2>
+  <div class="wrap">
+    <div class="header">
+      <h2>紫微命盤助手</h2>
+    </div>
 
     <form id="chart-form" method="post" novalidate>
-        <div>
-            <label>國曆年：</label>
-            <input type="number" name="year" value="{{ inputs.year }}" required autocomplete="off" inputmode="numeric">
-        </div>
+      <div class="row">
+        <label>國曆年：</label>
+        <input type="number" name="year" value="{{ inputs.year }}" required autocomplete="off" inputmode="numeric" />
+      </div>
+      <div class="row">
+        <label>月：</label>
+        <input type="number" name="month" value="{{ inputs.month }}" min="1" max="12" required autocomplete="off" inputmode="numeric" />
+      </div>
+      <div class="row">
+        <label>日：</label>
+        <input type="number" name="day" value="{{ inputs.day }}" min="1" max="31" required autocomplete="off" inputmode="numeric" />
+      </div>
+      <div class="row">
+        <label>時辰：</label>
+        <select name="hour">
+          {% for h in range(0,24) %}
+          <option value="{{ h }}" {% if h == inputs.hour %}selected{% endif %}>{{ h }} 時</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="row">
+        <label>性別：</label>
+        <select name="gender">
+          <option value="m" {% if inputs.gender == 'm' %}selected{% endif %}>男</option>
+          <option value="f" {% if inputs.gender == 'f' %}selected{% endif %}>女</option>
+        </select>
+      </div>
+      <div class="row">
+        <label>流年：</label>
+        <input type="number" name="cyear" value="{{ inputs.cyear }}" required autocomplete="off" inputmode="numeric" />
+      </div>
+      <div class="hint">例：2025。請輸入國曆。</div>
 
-        <div>
-            <label>月：</label>
-            <input type="number" name="month" value="{{ inputs.month }}" min="1" max="12" required autocomplete="off" inputmode="numeric">
-        </div>
-
-        <div>
-            <label>日：</label>
-            <input type="number" name="day" value="{{ inputs.day }}" min="1" max="31" required autocomplete="off" inputmode="numeric">
-        </div>
-
-        <div>
-            <label>時辰：</label>
-            <select name="hour">
-                {% for h in range(0,24) %}
-                <option value="{{ h }}" {% if h == inputs.hour %}selected{% endif %}>{{ h }} 時</option>
-                {% endfor %}
-            </select>
-        </div>
-
-        <div>
-            <label>性別：</label>
-            <select name="gender">
-                <option value="m" {% if inputs.gender == 'm' %}selected{% endif %}>男</option>
-                <option value="f" {% if inputs.gender == 'f' %}selected{% endif %}>女</option>
-            </select>
-        </div>
-
-        <div>
-            <label>流年：</label>
-            <input type="number" name="cyear" value="{{ inputs.cyear }}" required autocomplete="off" inputmode="numeric">
-            <div class="hint">例：2025</div>
-        </div>
-
-        <button id="submit-btn" type="submit">生成命盤</button>
-        <div id="loading" class="loading">
-            <span class="spinner"></span>處理中，請稍候…
-        </div>
+      <button id="submit-btn" type="submit">生成命盤</button>
+      <div id="loading" class="loading"><span class="spinner"></span>處理中，請稍候…</div>
     </form>
 
     {% if result_html or raw_input %}
     <div class="result">
-        {% if raw_input %}
-        <div class="card">
-            <h3>命盤原始資料：</h3>
-            <pre>{{ raw_input }}</pre>
-        </div>
-        {% endif %}
+      {% if raw_input %}
+      <div class="card">
+        <h3>命盤原始資料：</h3>
+        <pre class="pre-raw">{{ raw_input }}</pre>
+      </div>
+      {% endif %}
 
-        {% if result_html %}
-        {# 這裡不強制判斷是否為錯誤訊息；後端會以內容呈現 #}
-        <div class="card">
-            <h3>分析結果：</h3>
-            {{ result_html|safe }}
-        </div>
-        {% endif %}
+      {% if result_html %}
+      <div class="card analysis">
+        <h3>分析結果：</h3>
+        {{ result_html|safe }}
+      </div>
+      {% endif %}
     </div>
     {% endif %}
+  </div>
 
-    <script>
-        (function () {
-            const form = document.getElementById('chart-form');
-            const btn = document.getElementById('submit-btn');
-            const loading = document.getElementById('loading');
+  <script>
+    (function(){
+      const form = document.getElementById('chart-form');
+      const btn = document.getElementById('submit-btn');
+      const loading = document.getElementById('loading');
 
-            form.addEventListener('submit', function () {
-                // 基礎前端校驗（避免空值誤送）
-                const required = ['year', 'month', 'day', 'cyear'];
-                for (const name of required) {
-                    const el = form.querySelector(`[name="${name}"]`);
-                    if (!el || !el.value) {
-                        el && el.focus();
-                        return; // 簡單阻擋
-                    }
-                }
-                btn.disabled = true;
-                loading.style.display = 'block';
-            });
-        })();
-    </script>
+      form.addEventListener('submit', function(){
+        const required = ['year','month','day','cyear'];
+        for (const name of required){
+          const el = form.querySelector(`[name="${name}"]`);
+          if (!el || !el.value){ el && el.focus(); return; }
+        }
+        btn.disabled = true;
+        loading.style.display = 'block';
+      });
+    })();
+  </script>
 </body>
 </html>
