@@ -26,30 +26,54 @@ def fetch_chart_selenium(year, month, day, hour, gender):
     service = None
 
     if IS_RENDER:
-        # === Render 環境設定 (保持不變) ===
-        chrome_path = os.getenv("CHROME_BIN", "/usr/bin/chromium-browser")
-        driver_path = os.getenv("CHROMEDRIVER_PATH", "/usr/lib/chromium-browser/chromedriver")
+        # === Render 環境設定（加強版） ===
+        # 建議在 render.yaml 設成：
+        # CHROME_BIN=/usr/bin/chromium
+        # CHROMEDRIVER_PATH=/usr/bin/chromedriver
+        chrome_path = os.getenv("CHROME_BIN", "/usr/bin/chromium")
+        driver_path = os.getenv("CHROMEDRIVER_PATH", "/usr/bin/chromedriver")
         
         if not os.path.exists(driver_path):
-            raise FileNotFoundError("Render 環境找不到 chromedriver，請檢查 render.yaml 安裝狀態。")
+            raise FileNotFoundError("Render 環境找不到 chromedriver，請檢查 render.yaml 安裝與路徑設定。")
 
-        # Render 必須設定 binary_location 並使用 headless 模式
+        # 準備乾淨可寫的暫存資料夾（避免權限或 /dev/shm 問題）
+        TMP_BASE = "/tmp"
+        UD = os.path.join(TMP_BASE, "chrome-user-data")
+        DP = os.path.join(TMP_BASE, "chrome-data")
+        DC = os.path.join(TMP_BASE, "chrome-cache")
+        os.makedirs(UD, exist_ok=True)
+        os.makedirs(DP, exist_ok=True)
+        os.makedirs(DC, exist_ok=True)
+
+        # Headless/容器相容旗標
         options.binary_location = chrome_path
         options.add_argument("--headless=new")
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
         options.add_argument("--disable-gpu")
+        options.add_argument("--disable-extensions")
         options.add_argument("--disable-software-rasterizer")
         options.add_argument("--window-size=1280,800")
-        options.add_argument("--disable-extensions")
         options.add_argument("--disable-infobars")
+        options.add_argument("--no-first-run")
+        options.add_argument("--no-zygote")
+        options.add_argument("--single-process")
+        options.add_argument("--remote-debugging-port=9222")
+        options.add_argument(f"--user-data-dir={UD}")
+        options.add_argument(f"--data-path={DP}")
+        options.add_argument(f"--disk-cache-dir={DC}")
         options.page_load_strategy = "eager"
 
-        service = Service(driver_path)
+        # 讓 ChromeDriver 輸出詳細 log，方便頁面上回傳尾端內容排錯
+        log_file = os.path.join(TMP_BASE, "chromedriver.log")
+        try:
+            service = Service(driver_path, log_output=log_file)
+        except TypeError:
+            # 舊版 selenium 無 log_output 參數時退回預設
+            service = Service(driver_path)
 
     else:
         # === 本地環境設定 - 強化尋找邏輯 ===
-        # 1. 嘗試在當前目錄尋找 (最符合使用者操作)
         local_driver_path = os.path.join(os.getcwd(), 'chromedriver')
         if os.name == 'nt' and not os.path.exists(local_driver_path):  # Windows 檢查 .exe
             local_driver_path = os.path.join(os.getcwd(), 'chromedriver.exe')
@@ -60,33 +84,29 @@ def fetch_chart_selenium(year, month, day, hour, gender):
             service = Service(local_driver_path)
             print(f"DEBUG: 本地環境，使用專案根目錄的 ChromeDriver: {local_driver_path}")
         else:
-            # 2. 退而求其次，嘗試讓 Service() 自動尋找 (PATH)
+            # 退而求其次，嘗試讓 Service() 用 PATH
             try:
                 service = Service()
                 print("DEBUG: 本地環境，使用 PATH 環境變數中的 ChromeDriver。")
             except Exception as e:
-                # 如果本地執行失敗，提供明確的指導
                 raise FileNotFoundError(
                     f"本地環境找不到 chromedriver。請確認已下載對應版本的 chromedriver "
                     f"並放置在系統 PATH 或本專案的根目錄。原始錯誤: {e}"
                 )
         
-        # 本地除錯：不使用 Headless 模式，讓瀏覽器可見
-        # 僅在未明確找到路徑且 Service() 成功時，允許它使用預設的 Chrome
+        # 本地除錯可見視窗（若未明確找到路徑且用 PATH）
         if not explicit_path_found:
-            options.add_experimental_option("detach", True)  # 避免程式結束就關閉
+            options.add_experimental_option("detach", True)
         options.page_load_strategy = "eager"
 
     # === Driver 建立：優先使用 Selenium Manager，自動解決版本相容 ===
-    # 先嘗試 webdriver.Chrome(options=options)（需要 Selenium >= 4.6）
-    # 若該環境無法使用，才用前面準備好的 Service(...) 作為後備方案。
     try:
         driver = webdriver.Chrome(options=options)
     except Exception as e1:
         if service is not None:
             driver = webdriver.Chrome(service=service, options=options)
         else:
-            # 沒有可用的 service 就把原始錯誤丟出，讓前端顯示
+            # 沒有可用的 service 就把原始錯誤丟出
             raise e1
 
     try:
@@ -97,7 +117,6 @@ def fetch_chart_selenium(year, month, day, hour, gender):
         WebDriverWait(driver, 8).until(EC.presence_of_element_located((By.NAME, "Sex")))
 
         # 填寫表單
-        # 注意: 確保您的瀏覽器版本與 chromedriver 版本相符（Selenium Manager 會自動處理）
         if gender.lower().startswith("m"):
             driver.find_element(By.ID, "bMale").click()
         else:
@@ -139,7 +158,6 @@ def fetch_chart_selenium(year, month, day, hour, gender):
         return chart_text
 
     finally:
-        # 僅在成功運行後退出 Driver
         if driver:
             driver.quit()
 
@@ -179,13 +197,31 @@ def home():
             result_html = markdown.markdown(md, extensions=["tables"])
 
         except Exception as e:
-            # 捕獲所有錯誤並回傳紅字訊息給用戶
+            # 捕獲所有錯誤並回傳紅字訊息給用戶，同時附上 ChromeDriver log 尾端
             print(f"ERROR: {e}")
-            # 注意：這裡將錯誤訊息完整顯示出來，讓用戶知道問題所在
+
+            # 讀取 /tmp/chromedriver.log 尾端 200 行便於排錯（若檔案存在）
+            tail = ""
+            try:
+                with open("/tmp/chromedriver.log", "r", encoding="utf-8", errors="ignore") as f:
+                    tail = "".join(f.readlines()[-200:])
+            except Exception:
+                pass
+
+            safe_tail = (
+                tail[:8000]
+                .replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+            )
+
             result_html = (
                 "<p style='color:red; font-weight: bold;'>發生錯誤：無法生成命盤</p>"
                 f"<p style='color:orange;'>原因：{e}</p>"
-                "<p style='color:lightgray; font-size: small;'>請檢查您的出生資訊是否有效，或確認 ChromeDriver/Chrome 版本是否相符。</p>"
+                "<p style='color:lightgray; font-size: small;'>"
+                "請確認 Render 環境的 chromium/chromedriver 路徑及 headless 旗標；"
+                "若仍失敗，請提供下方 ChromeDriver 日誌尾端以利排錯。</p>"
+                f"<pre style='white-space:pre-wrap; font-size:12px; color:#ccc;'>{safe_tail}</pre>"
             )
 
     # 渲染結果頁面
