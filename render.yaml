@@ -1,19 +1,22 @@
 services:
   - type: web
-    name: mingpan-app
-    env: python
-    region: singapore
+    name: ziwei-mingpan
+    runtime: python
     plan: free
+    region: singapore   # 任選
     buildCommand: |
       apt-get update
-      # Render 基於 Debian，chromium-driver 路徑是 /usr/lib/chromium-browser/chromedriver
-      apt-get install -y chromium chromium-driver fonts-liberation
+      apt-get install -y chromium chromium-driver
       pip install -r requirements.txt
-    startCommand: gunicorn app:app
+    startCommand: |
+      gunicorn app:app --workers=1 --threads=4 --timeout=120
     envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
       - key: CHROME_BIN
-        value: /usr/bin/chromium-browser
+        value: /usr/bin/chromium
       - key: CHROMEDRIVER_PATH
-        value: /usr/lib/chromium-browser/chromedriver
-      - key: PYTHONUNBUFFERED
-        value: "1"
+        value: /usr/bin/chromedriver
+      - key: PORT
+        value: 10000
+    healthCheckPath: /
