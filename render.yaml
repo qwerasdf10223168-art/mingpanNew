@@ -3,20 +3,44 @@ services:
     name: ziwei-mingpan
     runtime: python
     plan: free
-    region: singapore   # 任選
+    region: singapore
     buildCommand: |
+      set -e
       apt-get update
-      apt-get install -y chromium chromium-driver
+      # 必要的系統相依：字型/GTK/NSS/音訊/GBM 等（缺這些 Chrome 會直接退出）
+      apt-get install -y \
+        wget unzip \
+        fonts-liberation \
+        libasound2 \
+        libnss3 \
+        libxss1 \
+        libatk-bridge2.0-0 \
+        libgtk-3-0 \
+        libgbm1 \
+        libu2f-udev \
+        xdg-utils
+      # 下載最新版 Chrome for Testing（穩定）與對應 chromedriver
+      mkdir -p /opt/chrome /opt/chromedriver
+      wget -q https://storage.googleapis.com/chrome-for-testing-public/latest/linux64/chrome-linux64.zip -O /tmp/chrome.zip
+      wget -q https://storage.googleapis.com/chrome-for-testing-public/latest/linux64/chromedriver-linux64.zip -O /tmp/chromedriver.zip
+      unzip -q /tmp/chrome.zip -d /opt
+      unzip -q /tmp/chromedriver.zip -d /opt
+      # 移到固定路徑
+      mv /opt/chrome-linux64/* /opt/chrome/
+      mv /opt/chromedriver-linux64/* /opt/chromedriver/
+      chmod +x /opt/chrome/chrome /opt/chromedriver/chromedriver
+      # Python 依賴
       pip install -r requirements.txt
     startCommand: |
       gunicorn app:app --workers=1 --threads=4 --timeout=120
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.9
+      # 指向剛安裝的 Chrome for Testing 與 chromedriver
       - key: CHROME_BIN
-        value: /usr/bin/chromium
+        value: /opt/chrome/chrome
       - key: CHROMEDRIVER_PATH
-        value: /usr/bin/chromedriver
+        value: /opt/chromedriver/chromedriver
       - key: PORT
         value: 10000
     healthCheckPath: /
