@@ -149,17 +149,28 @@ def fetch_chart_http(year, month, day, hour, gender):
         snippet = soup2.get_text(" ", strip=True)[:400]
         raise RuntimeError(f"找不到命盤主表格，可能網站結構變更或輸入無效。頁面片段：{snippet}")
 
-    # 4) 萃取表格文字
+    # 4) 萃取表格文字（改為段落式，與截圖一致）
     cells = main_table.find_all("td")
     chart_lines = []
+    header_pat = re.compile(r'^[甲乙丙丁戊己庚辛壬癸][子丑寅卯辰巳午未申酉戌亥]【')
+
     for c in cells:
         txt = c.get_text("\n", strip=True)
         if not txt:
             continue
         txt = re.sub(r'^\d+\.\s*', '', txt)  # 清掉 "1. " 這類編號
+
+        # 若遇到「干支【宮位】」標題，前面加一個空行分段
+        if header_pat.match(txt):
+            if chart_lines and chart_lines[-1] != "":
+                chart_lines.append("")
+            chart_lines.append(txt)
+            continue
+
+        # 其他行照常加入（大限、小限、星曜/備註、基本資料等）
         chart_lines.append(txt)
 
-    return "\n\n".join(chart_lines)
+    return "\n".join(chart_lines)
 
 # ---------------------- Flask 主邏輯 ----------------------
 @app.route("/", methods=["GET", "POST"])
