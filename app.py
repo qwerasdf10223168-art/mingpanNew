@@ -1,220 +1,285 @@
+# -*- coding: utf-8 -*-
 from flask import Flask, render_template, request
 import mingpan_logic as mp
-import markdown
-import os
-import re
 import requests
 from bs4 import BeautifulSoup
-from urllib.parse import urljoin
+import re, html, io, os, contextlib
+from typing import Optional, List
 
 app = Flask(__name__)
-
 FORM_URL = "https://fate.windada.com/cgi-bin/fate"
 
-def _soup_from_bytes(content: bytes) -> BeautifulSoup:
-    """
-    以 bytes 建立 BeautifulSoup（讓它依 <meta charset> 自動判斷），
-    若仍有亂碼，改用 big5 / cp950 備援。
-    """
-    # 先讓 BS 依內容/標頭自動判斷（多半正確）
-    soup = BeautifulSoup(content, "lxml")
-    # 簡單檢查是否明顯亂碼（常見 'å', 'ç', 'é' 大量出現）
-    txt = soup.get_text()[:200]
-    if txt.count("å") + txt.count("ç") + txt.count("é") > 5:
-        # 再試 big5 / cp950
-        for enc in ("big5-hkscs", "cp950", "big5"):
-            try:
-                soup = BeautifulSoup(content.decode(enc, errors="ignore"), "lxml")
-                t2 = soup.get_text()[:200]
-                if t2.count("å") + t2.count("ç") + t2.count("é") <= 1:
-                    break
-            except Exception:
-                continue
+# ---------------------------
+# 解碼
+# ---------------------------
+def decode_html(content: bytes) -> BeautifulSoup:
+    try:
+        soup = BeautifulSoup(content, "lxml")
+        txt = soup.get_text()[:200]
+        if txt.count("å") + txt.count("ç") + txt.count("é") > 5:
+            soup = BeautifulSoup(content.decode("big5", errors="ignore"), "lxml")
+    except Exception:
+        try:
+            soup = BeautifulSoup(content.decode("utf-8", errors="ignore"), "lxml")
+        except Exception:
+            soup = BeautifulSoup(content.decode("big5", errors="ignore"), "lxml")
     return soup
 
-def _pick_select_name(soup, select_id, fallback_name):
-    """從 select 的 id 找到對應的 name，若沒有就用預設名稱。"""
-    tag = soup.find("select", id=select_id)
-    if tag and tag.get("name"):
-        return tag["name"]
-    # 再嘗試以 placeholder/fallback 查找
-    alt = soup.find("select", {"name": fallback_name})
-    if alt and alt.get("name"):
-        return alt["name"]
-    return fallback_name
-
-def _pick_radio_value(soup, input_id, default_value):
-    """從 radio input 取實際 value 屬性，若沒有就用預設值。"""
-    tag = soup.find("input", id=input_id)
-    if tag and tag.get("value"):
-        return tag["value"]
-    # 如果找不到該 id，就挑選同 name 群組的任一 value 作為備援
-    # 常見 name：Sex、sex 等
-    for name_guess in ("Sex", "sex", "gender"):
-        group = soup.find_all("input", {"type": "radio", "name": name_guess})
-        if group:
-            # 優先挑有 "Male"/"男" 關聯的值
-            for g in group:
-                v = (g.get("value") or "").strip()
-                if v and (v.lower() in ("male", "m") or "男" in v):
-                    return v
-            # 否則就回傳第一個
-            v = (group[0].get("value") or default_value)
-            return v
-    return default_value
-
-def _find_main_table(soup: BeautifulSoup):
-    """尋找包含命盤主要內容的表格：以『命宮』為主關鍵，正則放寬，並有次要關鍵備援。"""
-    tables = soup.find_all("table")
-    pattern = re.compile(r"命\s*宮")
-    for t in tables:
-        text = t.get_text(" ", strip=True)
-        if pattern.search(text):
-            return t
-    # 備援：找含「紫微」且欄位很多的表格
+# ---------------------------
+# 找主表
+# ---------------------------
+TYPICAL_PALACE_KEYWORDS = ["命宮","兄弟","夫妻","子女","財帛","疾厄","遷移","交友","事業","田宅","福德","父母","陽曆"]
+def find_main_table(soup: BeautifulSoup):
     candidates = []
-    for t in tables:
-        text = t.get_text(" ", strip=True)
-        if ("紫微" in text or "身宮" in text or "田宅" in text or "兄弟" in text) and len(t.find_all("td")) >= 12:
-            candidates.append((len(t.find_all("td")), t))
-    if candidates:
-        candidates.sort(reverse=True)  # 取 td 最多者
-        return candidates[0][1]
+    for t in soup.find_all("table"):
+        txt = t.get_text(" ", strip=True)
+        if any(k in txt for k in TYPICAL_PALACE_KEYWORDS):
+            return t
+        if len(t.find_all("td")) >= 12:
+            candidates.append(t)
+    return candidates[0] if candidates else None
+
+# ---------------------------
+# 解析中央資訊（陽曆/農曆/干支/五行局/四化/命主身主）
+# ---------------------------
+def parse_center_block(td_html: str) -> Optional[str]:
+    text = td_html.replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n")
+    text = BeautifulSoup(text, "lxml").get_text("\n")
+    if not any(k in text for k in ["陽曆", "農曆", "干支", "五行局", "生年四化", "命主", "身主"]):
+        return None
+    lines = [ln.strip() for ln in re.split(r"[\r\n]+", text) if ln.strip()]
+    return "\n".join(lines) if lines else None
+
+# ---------------------------
+# 宮位格解析
+# ---------------------------
+GZ = "甲乙丙丁戊己庚辛壬癸"
+DZ = "子丑寅卯辰巳午未申酉戌亥"
+
+def td_html_to_text(td) -> str:
+    raw = td.decode_contents()
+    raw = re.sub(r"(?i)<br\s*/?>", "\n", raw)
+    return BeautifulSoup(raw, "lxml").get_text("\n")
+
+def build_header(full_text: str) -> str:
+    """
+    盡量輸出『干支【某某宮】』，若找不到干支則只輸出【某某宮】。
+    """
+    # 同行：丁巳【事業宮】
+    m = re.search(r"([%s][%s])?\s*【([^】]+宮)】" % (GZ, DZ), full_text)
+    if m:
+        gz = (m.group(1) or "").strip()
+        pal = m.group(2).strip()
+        return f"{gz}【{pal}】" if gz else f"【{pal}】"
+    # 可能『丁巳』與『【事業宮】』分行
+    mgz = re.search(r"([%s][%s])" % (GZ, DZ), full_text)
+    mpal = re.search(r"【([^】]+宮)】", full_text)
+    if mpal:
+        pal = mpal.group(1)
+        if mgz:
+            return f"{mgz.group(1)}【{pal}】"
+        return f"【{pal}】"
+    # 退路：第一行含『宮』
+    first_line = full_text.splitlines()[0].strip()
+    if "宮" in first_line and "【" not in first_line:
+        return f"【{first_line}】"
+    return first_line
+
+def parse_palace_block(td) -> Optional[str]:
+    # 先看是不是中央資訊
+    center_try = parse_center_block(td.decode_contents())
+    if center_try:
+        return center_try
+
+    full = td_html_to_text(td)
+    if not full.strip():
+        return None
+
+    header = build_header(full)
+
+    # ---- 抽「大限」「小限」（跨行也能抓），並從文本中刪除，避免落入星曜 ----
+    # 大限：大限: 44-53 / 大限 44－53
+    m_da = re.search(r"大\s*限[:：]?\s*(\d{1,3})\s*[-~－—～]\s*(\d{1,3})", full, flags=re.S)
+    da_line = f"大限:{m_da.group(1)}-{m_da.group(2)}" if m_da else "大限:"
+    if m_da:
+        full = full.replace(m_da.group(0), "")
+
+    # 小限：小限: 後面可跨行接一串數字
+    m_xiao = re.search(r"小\s*限[:：]?\s*([0-9\s,，、\n\r]+)", full, flags=re.S)
+    if m_xiao:
+        nums = re.findall(r"\d{1,3}", m_xiao.group(1))
+        xiao_line = "小限:" + (" ".join(nums) if nums else "")
+        full = full.replace(m_xiao.group(0), "")
+    else:
+        xiao_line = "小限:"
+
+    # ---- 剩餘當星曜：清掉空行與左右標點，改用半形逗號連接 ----
+    rest_lines = [ln.strip() for ln in full.splitlines() if ln.strip()]
+    # 去掉像「【事業宮】」「丁巳」等標題資訊殘留
+    rest_lines = [ln for ln in rest_lines if "宮" not in ln or "【" not in ln]
+    rest_lines = [ln for ln in rest_lines if not re.fullmatch(r"[%s][%s]" % (GZ, DZ), ln)]
+    # 清尾逗號與多餘頓號
+    stars = [re.sub(r"[，、]+\s*$", "", ln) for ln in rest_lines]
+    # 濾掉明顯非星曜的殘字（大限/小限被清掉後仍可能殘留單獨冒號）
+    stars = [s for s in stars if s and s not in (":", "：", "大限", "小限")]
+
+    star_line = ",".join(stars).strip(", ")
+
+    return f"{header}\n{da_line}\n{xiao_line}\n{star_line}"
+
+# ---------------------------
+# 送表單抓取（修正性別值）
+# ---------------------------
+COMMON_NAME_MAP = {
+    "year":  ["Year", "year", "y", "byear", "birthYear", "birth_year", "yy"],
+    "month": ["Month", "month", "m", "bmonth", "birthMonth"],
+    "day":   ["Day", "day", "d", "bday", "birthDay"],
+    "hour":  ["Hour", "hour", "h", "bhour", "time", "時"],
+    "sex":   ["Sex", "sex", "gender", "Gender"],
+}
+
+def choose_field_name(cands: List[str], names: set) -> Optional[str]:
+    for n in cands:
+        if n in names:
+            return n
     return None
 
-def fetch_chart_http(year, month, day, hour, gender):
-    """
-    以 requests 模擬表單提交，取得命盤主表格文字（不使用 Selenium/Chrome）
-    """
+def fetch_chart(year, month, day, hour, gender):
     s = requests.Session()
-    s.headers.update({
-        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                      "(KHTML, like Gecko) Chrome/122.0 Safari/537.36"
-    })
-
-    # 1) GET 表單（用 bytes 解析，避免亂碼）
+    s.headers.update({"User-Agent": "Mozilla/5.0"})
     r = s.get(FORM_URL, timeout=20)
-    r.raise_for_status()
-    soup = _soup_from_bytes(r.content)
-
+    soup = decode_html(r.content)
     form = soup.find("form")
     if not form:
-        snippet = soup.get_text(" ", strip=True)[:400]
-        raise RuntimeError(f"找不到命盤輸入表單。頁面片段：{snippet}")
+        txt = soup.get_text()[:800]
+        raise RuntimeError("找不到命盤表單：\n" + txt)
 
-    action = form.get("action") or FORM_URL
-    post_url = urljoin(FORM_URL, action)
+    post_url = form.get("action") or FORM_URL
+    post_url = requests.compat.urljoin(FORM_URL, post_url)
 
     payload = {}
+    form_names = set()
 
-    # 嘗試取得實際的 name
-    name_year  = (form.find("input", {"name": "Year"}) or {}).get("name", "Year")
-    name_month = _pick_select_name(form, "bMonth", "Month")
-    name_day   = _pick_select_name(form, "bDay",   "Day")
-    name_hour  = _pick_select_name(form, "bHour",  "Hour")
+    for inp in form.find_all(["input","textarea"]):
+        n = inp.get("name")
+        if not n: continue
+        form_names.add(n)
+        t = (inp.get("type") or "").lower()
+        v = inp.get("value", "")
+        if t in ("radio","checkbox"):
+            if inp.has_attr("checked"):
+                payload[n] = v
+        else:
+            payload[n] = v
 
-    # radio 群組的 name（Sex/sex/gender 等）
-    radio_name = None
-    for nm in ("Sex", "sex", "gender"):
-        if form.find("input", {"type": "radio", "name": nm}):
-            radio_name = nm
-            break
-    if not radio_name:
-        radio_name = (form.find("input", {"name": "Sex"}) or {}).get("name", "Sex")
+    # select 預設值
+    for sel in form.find_all("select"):
+        n = sel.get("name")
+        if not n: continue
+        form_names.add(n)
+        chosen = None
+        for opt in sel.find_all("option"):
+            if opt.has_attr("selected"):
+                chosen = opt.get("value", opt.text)
+                break
+        if chosen is None:
+            first = sel.find("option")
+            chosen = first.get("value", first.text) if first else ""
+        payload[n] = chosen
 
-    male_value   = _pick_radio_value(form, "bMale",   "Male")
-    female_value = _pick_radio_value(form, "bFemale", "Female")
+    # 對應欄位名
+    yname = choose_field_name(COMMON_NAME_MAP["year"], form_names)  or "Year"
+    mname = choose_field_name(COMMON_NAME_MAP["month"], form_names) or "Month"
+    dname = choose_field_name(COMMON_NAME_MAP["day"], form_names)   or "Day"
+    hname = choose_field_name(COMMON_NAME_MAP["hour"], form_names)  or "Hour"
+    sname = choose_field_name(COMMON_NAME_MAP["sex"], form_names)   or "Sex"
 
-    payload[name_year]  = str(year)
-    payload[name_month] = str(int(month))
-    payload[name_day]   = str(int(day))
-    payload[name_hour]  = str(int(hour))
-    payload[radio_name] = male_value if str(gender).lower().startswith("m") else female_value
+    payload[yname] = str(year)
+    payload[mname] = str(month)
+    payload[dname] = str(day)
+    payload[hname] = str(hour)
 
-    # 附帶 hidden 欄位（避免伺服器校驗失敗）
-    for hid in form.find_all("input", {"type": "hidden"}):
-        name = hid.get("name")
-        val  = hid.get("value", "")
-        if name and name not in payload:
-            payload[name] = val
+    # ---- 性別：盡量填入站方期望的值（優先選擇顯示為「男」的 option / radio）----
+    sex_value = None
+    # select
+    sel = form.find("select", attrs={"name": sname}) if sname else None
+    if sel:
+        for opt in sel.find_all("option"):
+            label = (opt.get_text() or "").strip()
+            val = opt.get("value", "").strip()
+            if "男" in label:
+                sex_value = val if val != "" else label
+                break
+    # radio
+    if sex_value is None:
+        radios = form.find_all("input", attrs={"name": sname, "type": "radio"}) if sname else []
+        for rd in radios:
+            lbl = (rd.get("value", "") or "").strip()
+            # 某些站會用 0/1，但旁邊會有「男/女」文字；我們只看 value，不可靠時仍用 Male
+            if lbl in ("男","male","Male","M","1","0"):
+                # 偏好 1 代表男；若只有 0/1，我們挑 1；若只有 0，就退而求其次
+                sex_value = "1" if lbl in ("1","男","male","Male","M") else lbl
+                break
 
-    # 2) POST 送出
-    r2 = s.post(post_url, data=payload, headers={"Referer": FORM_URL}, timeout=30)
-    r2.raise_for_status()
-    soup2 = _soup_from_bytes(r2.content)
+    if sex_value is None:
+        sex_value = "Male" if str(gender).startswith(("m","M","男")) else "Female"
 
-    # 3) 找主表格
-    main_table = _find_main_table(soup2)
-    if not main_table:
-        snippet = soup2.get_text(" ", strip=True)[:400]
-        raise RuntimeError(f"找不到命盤主表格，可能網站結構變更或輸入無效。頁面片段：{snippet}")
+    payload[sname] = sex_value
 
-    # 4) 萃取表格文字（改為段落式，與截圖一致）
-    cells = main_table.find_all("td")
-    chart_lines = []
-    header_pat = re.compile(r'^[甲乙丙丁戊己庚辛壬癸][子丑寅卯辰巳午未申酉戌亥]【')
+    r2 = s.post(post_url, data=payload, timeout=25)
+    soup2 = decode_html(r2.content)
+    table = find_main_table(soup2)
+    if not table:
+        txt = soup2.get_text()[:800]
+        raise RuntimeError("找不到命盤主表格：\n" + txt)
 
-    for c in cells:
-        txt = c.get_text("\n", strip=True)
-        if not txt:
-            continue
-        txt = re.sub(r'^\d+\.\s*', '', txt)  # 清掉 "1. " 這類編號
+    blocks = []
+    for td in table.find_all("td"):
+        block = parse_palace_block(td)
+        if block:
+            blocks.append(block)
 
-        # 若遇到「干支【宮位】」標題，前面加一個空行分段
-        if header_pat.match(txt):
-            if chart_lines and chart_lines[-1] != "":
-                chart_lines.append("")
-            chart_lines.append(txt)
-            continue
+    return "\n\n".join(blocks)
 
-        # 其他行照常加入（大限、小限、星曜/備註、基本資料等）
-        chart_lines.append(txt)
-
-    return "\n".join(chart_lines)
-
-# ---------------------- Flask 主邏輯 ----------------------
+# ---------------------------
+# Flask UI
+# ---------------------------
 @app.route("/", methods=["GET", "POST"])
 def home():
-    result_html = ""
-    raw_input = ""
-    user_inputs = {"year": 1990, "month": 1, "day": 1, "hour": 0, "gender": "m", "cyear": 2025}
+    output_html = ""
+    raw_text = ""
+    user_inputs = {"year": 1990, "month": 2, "day": 1, "hour": 0, "gender": "m", "cyear": 2026}
 
     if request.method == "POST":
         try:
-            user_inputs["year"] = int(request.form.get("year", 1990))
-            user_inputs["month"] = int(request.form.get("month", 1))
-            user_inputs["day"] = int(request.form.get("day", 1))
-            user_inputs["hour"] = int(request.form.get("hour", 0))
+            user_inputs["year"]   = int(request.form.get("year", 1990))
+            user_inputs["month"]  = int(request.form.get("month", 1))
+            user_inputs["day"]    = int(request.form.get("day", 1))
+            user_inputs["hour"]   = int(request.form.get("hour", 0))
             user_inputs["gender"] = request.form.get("gender", "m")
-            user_inputs["cyear"] = int(request.form.get("cyear", 2025))
+            user_inputs["cyear"]  = int(request.form.get("cyear", 2026))
 
-            # ★ 使用 HTTP 直連版
-            raw_input = fetch_chart_http(
-                user_inputs["year"],
-                user_inputs["month"],
-                user_inputs["day"],
-                user_inputs["hour"],
-                user_inputs["gender"]
+            raw_text = fetch_chart(
+                user_inputs["year"], user_inputs["month"],
+                user_inputs["day"], user_inputs["hour"], user_inputs["gender"]
             )
 
-            # 命盤分析
             mp.CYEAR = user_inputs["cyear"]
-            data, col_order, year_stem = mp.parse_chart(raw_input)
-            md = mp.render_markdown_table_v7(data, col_order, year_stem, raw_input)
-            result_html = markdown.markdown(md, extensions=["tables"])
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                report = mp.run_report(raw_text)
+            debug = buf.getvalue().strip()
+            full = (debug + "\n\n" + report) if debug else report
+
+            output_html = (
+                "<pre style='white-space:pre-wrap;font-size:14px;line-height:1.6;'>"
+                + html.escape(full) + "</pre>"
+            )
 
         except Exception as e:
-            print(f"ERROR: {e}")
-            result_html = (
-                "<p style='color:red; font-weight: bold;'>發生錯誤：無法生成命盤</p>"
-                f"<p style='color:orange;'>原因：{e}</p>"
-                "<p style='color:lightgray; font-size: small;'>"
-                "（此版本不使用 Chrome/Selenium；若仍失敗，多半為網站欄位或結構更新，請將此錯誤訊息貼回協助調整）</p>"
-            )
+            output_html = f"<p style='color:red;'>發生錯誤：{html.escape(str(e))}</p>"
 
-    return render_template("index.html", result_html=result_html, raw_input=raw_input, inputs=user_inputs)
+    return render_template("index.html", result_html=output_html, raw_input=raw_text, inputs=user_inputs)
 
-# ---------------------- 啟動伺服器 ----------------------
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=True)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
