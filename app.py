@@ -199,30 +199,61 @@ def fetch_chart(year, month, day, hour, gender):
     payload[dname] = str(day)
     payload[hname] = str(hour)
 
-    # ---- 性別：盡量填入站方期望的值（優先選擇顯示為「男」的 option / radio）----
+       # ---- 性別（依使用者選擇 m/f 精準帶值）----
+    gender_str = str(gender).strip().lower()
+    want_female = gender_str.startswith(("f", "女"))  # True=女, False=男
     sex_value = None
-    # select
+
+    # 先找 select[name=sname]
     sel = form.find("select", attrs={"name": sname}) if sname else None
     if sel:
+        # 先比對 option 顯示文字（含「男」「女」），再比對 value（M/F/1/0）
         for opt in sel.find_all("option"):
             label = (opt.get_text() or "").strip()
-            val = opt.get("value", "").strip()
-            if "男" in label:
+            val = (opt.get("value") or "").strip()
+            if want_female and ("女" in label or val.lower() in ("f","female","0")):
                 sex_value = val if val != "" else label
                 break
-    # radio
-    if sex_value is None:
-        radios = form.find_all("input", attrs={"name": sname, "type": "radio"}) if sname else []
-        for rd in radios:
-            lbl = (rd.get("value", "") or "").strip()
-            # 某些站會用 0/1，但旁邊會有「男/女」文字；我們只看 value，不可靠時仍用 Male
-            if lbl in ("男","male","Male","M","1","0"):
-                # 偏好 1 代表男；若只有 0/1，我們挑 1；若只有 0，就退而求其次
-                sex_value = "1" if lbl in ("1","男","male","Male","M") else lbl
+            if (not want_female) and ("男" in label or val.lower() in ("m","male","1")):
+                sex_value = val if val != "" else label
                 break
+        # 若還沒選到，再純看 value 重試一次
+        if sex_value is None:
+            for opt in sel.find_all("option"):
+                val = (opt.get("value") or "").strip().lower()
+                if want_female and val in ("f","female","0"):
+                    sex_value = (opt.get("value") or "").strip()
+                    break
+                if (not want_female) and val in ("m","male","1"):
+                    sex_value = (opt.get("value") or "").strip()
+                    break
 
+    # 若不是 select，就找 radio[name=sname]
+    if sex_value is None and sname:
+        radios = form.find_all("input", attrs={"name": sname, "type": "radio"})
+        male_val = None
+        female_val = None
+        for rd in radios:
+            val = (rd.get("value") or "").strip()
+            vlow = val.lower()
+            # 嘗試讀取緊鄰文字（有些頁面 label 在旁邊）
+            label_text = ""
+            sib = rd.next_sibling
+            if isinstance(sib, str):
+                label_text = sib.strip()
+            # 標記男女候選
+            if ("男" in label_text) or (vlow in ("m","male","1")):
+                male_val = val
+            if ("女" in label_text) or (vlow in ("f","female","0")):
+                female_val = val
+        if want_female and female_val is not None:
+            sex_value = female_val
+        if (not want_female) and male_val is not None:
+            sex_value = male_val
+
+    # 最後保底：多數站 1=男、0=女；若不同也常可接受 M/F
     if sex_value is None:
-        sex_value = "Male" if str(gender).startswith(("m","M","男")) else "Female"
+        sex_value = "0" if want_female else "1"
 
     payload[sname] = sex_value
 
