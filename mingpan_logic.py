@@ -686,11 +686,34 @@ def _template_text(palace_key: str, mode: str, status: str = "一般") -> str:
     return base
 
 def _parse_star_and_palace(line: str, scope: str):
-    """從『…化忌 入 大限X宮 / 流年X宮 …』抓星名與宮位縮寫。"""
-    m = re.search(rf"\s*([^\s：:]+)化忌\s+入\s+{scope}([命兄夫子財疾遷僕官田福父])", line)
-    star = m.group(1) if m else "財"
-    palace = m.group(2) if m else "財"
-    return star, palace
+    """
+    從『…化忌 入 大限X宮 / 流年X宮 …』抓星名與宮位鍵。
+    同時支援全名（交友宮）與縮寫（僕）。
+    """
+    # 可配：命宮/兄弟宮/.../父母宮 或 單字縮寫
+    pat = rf"""
+        \s*([^\s：:]+)化忌          # 星名
+        \s+入\s+{scope}\s*          # 入 大限/流年
+        (
+           命宮|兄弟宮|夫妻宮|子女宮|財帛宮|疾厄宮|
+           遷移宮|交友宮|事業宮|田宅宮|福德宮|父母宮|
+           [命兄夫子財疾遷僕官田福父]
+        )
+    """
+    m = re.search(pat, line, re.X)
+    if not m:
+        return "財", "財"  # 安全預設
+
+    star = m.group(1)
+    palace_token = m.group(2)
+
+    # 全名→縮寫；縮寫則直接用
+    if palace_token in PALACE_ABBR:          # e.g. '交友宮' → '僕'
+        pkey = PALACE_ABBR[palace_token]
+    else:
+        pkey = palace_token                   # 已是 '僕' 這類縮寫
+
+    return star, pkey
 
 # ======================= 主輸出（破財雷達） =======================
 def render_cai_ji_report(raw_text: str, data=None, col_order=None, year_stem=None) -> str:
