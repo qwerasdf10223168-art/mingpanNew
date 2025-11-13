@@ -154,18 +154,18 @@
 
     {% if result_html or raw_input %}
     <div class="result">
-        {% if raw_input %}
-        <div class="card">
-            <h3>命盤原始資料：</h3>
-            <pre>{{ raw_input }}</pre>
-        </div>
-        {% endif %}
-
         {% if result_html %}
         {# 這裡不強制判斷是否為錯誤訊息；後端會以內容呈現 #}
         <div class="card">
             <h3>分析結果：</h3>
             {{ result_html|safe }}
+        </div>
+        {% endif %}
+
+        {% if raw_input %}
+        <div class="card">
+            <h3>命盤原始資料：</h3>
+            <pre>{{ raw_input }}</pre>
         </div>
         {% endif %}
     </div>
